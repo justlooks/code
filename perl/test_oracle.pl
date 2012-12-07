@@ -1,6 +1,5 @@
 #!/usr/bin/perl 
 
-
 use DBI;
 use Data::Dumper;
 
@@ -16,23 +15,21 @@ sub dbhandle_release {
 	$dbh->disconnect or die $dbh->errstr;
 }
 
+# return multi-array result set
 sub info_fetch {
 	my ($sqlstr,$dbh) = @_;
-#	print "1 get $#$re\n";
 	my $sth = $dbh->prepare("$sqlstr");
 	$sth->execute();
-	my $hash_ref;
-#	if($re eq 1) {
-#		print "return struct\n";
-#		my $depref = $sth->fetchrow_arrayref;
-#		$sth->finish;
-#		return $depref;	
-#	}
-	while($hash_ref = $sth->fetchrow_hashref) {
-		print "i get sth\n";
-			print $hash_ref->{COLUMN_NAME},"\n";
+	my $arr_ref;
+	my @rows = ();
+	while($arr_ref = $sth->fetchrow_arrayref) {
+		my @arr_temp = ();
+		for my $k (0..$#$arr_ref) {
+			push(@arr_temp,$arr_ref->[$k]);
+		}
+		push(@rows,[@arr_temp]);	
 	}
-
+	return \@rows;
 }
 
 my %conn_info = (
@@ -44,13 +41,15 @@ my %conn_info = (
 #print Dumper(\%conn_info);
 my $dbh = dbhandle_get(\%conn_info);
 
-#my $sql = q{desc v$instance};
-my $sql = q{select COLUMN_NAME from dba_tab_columns where table_name='T1' and owner='HR'};
+my $sql = q{select space_usage_kbytes,occupant_name,occupant_desc from v$sysaux_occupants order by 1 desc};
+#my $sql = q{select COLUMN_NAME from dba_tab_columns where table_name='T1' and owner='HR'};
 
-my $redep = 1;
-my $deparr_ref = info_fetch($sql,$dbh);
+my $re_ref = info_fetch($sql,$dbh);
+print ${$re_ref->[1]}[1],"\n";
 
 dbhandle_release($dbh);
 
-print Dumper(@$deparr_ref);
+
+#my $test_ref = [ [ 'a', 'b', 'c' ],[ '2', '3', '4' ] ];
+#print ${$test_ref->[1]}[0],"\n";
 
