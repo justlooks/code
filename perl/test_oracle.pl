@@ -15,7 +15,7 @@ sub dbhandle_release {
 	$dbh->disconnect or die $dbh->errstr;
 }
 
-# return multi-array result set,返回结果集和格式化长度信息
+# return multi-array result set,测试
 sub info_fetch {
 	my ($sqlstr,$dbh) = @_;
 	my $sth = $dbh->prepare("$sqlstr");
