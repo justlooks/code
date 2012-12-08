@@ -60,12 +60,15 @@ sub result_print {
 		}
 		printf "\n";
 	}
+	print "\n";
 }
 
 sub title_make {
 	my $sql = shift;
 	$sql =~ s/^select\s+(.*)\s+from.*$/\1/i;
-	my @cols = map {s/.*\s+(\w+)/\1/;$_} split(/,/,$sql);
+	my @cols = map {s/.*\s+(\S+)/\1/;
+        #print "i get $_\n";    
+        $_} split(/ ,/,$sql);
 	for my $i (0..$#cols) {
 		$cols[$i] = uc($cols[$i]);
 	}
@@ -94,11 +97,12 @@ my $dbh = dbhandle_get(\%conn_info);
 #my $head = ['COLUMN_NAME'];
 
 
+=pod
 # database overview
 
 mess_print("Database Info");
 
-my $db_ov_sql = q{select dbid,name, created ,log_mode,open_mode,supplemental_log_data_min,platform_name, current_scn,flashback_on from v$database};
+my $db_ov_sql = q{select dbid,name ,created ,log_mode ,open_mode ,supplemental_log_data_min ,platform_name ,current_scn ,flashback_on from v$database};
 
 my $head = title_make($db_ov_sql);
 my ($re_ref,$fmt_arr) = info_fetch($db_ov_sql,$dbh);
@@ -108,22 +112,36 @@ result_print($re_ref,$fmt_arr,$head);
 
 mess_print("Instance Info");
 
-my $inst_ov_sql = q{select instance_name,host_name,version,startup_time,status,logins,database_status from v$instance};
+my $inst_ov_sql = q{select instance_name ,host_name ,version ,startup_time ,status ,logins ,database_status from v$instance};
 
 $head = title_make($inst_ov_sql);
 ($re_ref,$fmt_arr) = info_fetch($inst_ov_sql,$dbh);
 result_print($re_ref,$fmt_arr,$head);
 
+=cut
 
 # pga overview
 
 mess_print("PGA Info");
 
-my $pga_ov_sql = q{select PGA_TARGET_FOR_ESTIMATE/1024/1024 as PGA_TARGET_FOR_ESTIMATE ,PGA_TARGET_FACTOR ,ADVICE_STATUS,BYTES_PROCESSED/1024/1024 as BYTES_PROCESSED ,ESTD_EXTRA_BYTES_RW ,ESTD_PGA_CACHE_HIT_PERCENTAGE ,ESTD_OVERALLOC_COUNT from v$pga_target_advice};
+my $pga_stat_sql = q{select name ,decode(unit,'bytes',trunc(to_char(value/1024/1024))||' M','percent',to_char(value)||' %',to_char(value)||' times') mbyte from v$pgastat};
+$head = title_make($pga_stat_sql);
+($re_ref,$fmt_arr) = info_fetch($pga_stat_sql,$dbh);
+result_print($re_ref,$fmt_arr,$head);
+
+#my $pga_ov_sql = q{select PGA_TARGET_FOR_ESTIMATE/1024/1024 as PGA_TARGET_FOR_ESTIMATE ,PGA_TARGET_FACTOR ,ADVICE_STATUS,BYTES_PROCESSED/1024/1024 as BYTES_PROCESSED ,ESTD_EXTRA_BYTES_RW ,ESTD_PGA_CACHE_HIT_PERCENTAGE ,ESTD_OVERALLOC_COUNT from v$pga_target_advice};
+
+my $pga_ov_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_for_est ,to_char(pga_target_factor*100,'999.9')||'%' pga_target_factor ,advice_status ,trunc(bytes_processed/1024/1024) Mbytes_processed ,trunc(estd_extra_bytes_rw/1024/1024) estd_extra_Mbytes_rw ,to_char(estd_pga_cache_hit_percentage,'999')||'%' est_pga_cache_hit_percentage ,estd_overalloc_count from v$pga_target_advice};
 
 $head = title_make($pga_ov_sql);
 ($re_ref,$fmt_arr) = info_fetch($pga_ov_sql,$dbh);
 result_print($re_ref,$fmt_arr,$head);
+
+my $o1m_stat_sql = q{select case when low_optimal_size < 1024*1024 then to_char(low_optimal_size/1024,'999')||'KB' else to_char(low_optimal_size/1024/1024,'999')||'MB' end cache_low ,case when (high_optimal_size+1)<1024*1024 then to_char(high_optimal_size/1024,'999')||'KB' else to_char(high_optimal_size/1024/1024,'999')||'MB' end cache_high ,optimal_executions||'/'||onepass_executions||'/'||multipasses_executions O_1_M  from v$sql_workarea_histogram where total_executions <> 0};
+$head = title_make($o1m_stat_sql);
+($re_ref,$fmt_arr) = info_fetch($o1m_stat_sql,$dbh);
+result_print($re_ref,$fmt_arr,$head);
+
 dbhandle_release($dbh);
 
 
