@@ -1,7 +1,8 @@
 #!/usr/bin/perl 
 
 use DBI;
-use Term::ANSIColor qw(:constants);
+#use Term::ANSIColor qw(:constants colored);
+use Term::ANSIColor qw(colored);
 use Data::Dumper;
 
 $Term::ANSIColor::AUTORESET = 1;
@@ -80,12 +81,13 @@ sub title_make {
 }
 
 sub mess_print {
-	$mesg = shift;
-	print BOLD WHITE "$mesg\n";
+	my($mesg,$fmt) = @_;
+	print colored(ucfirst($mesg)."\n",$fmt);
 }
 
 my $db_sql = q{select dbid ,name ,created ,current_scn ,log_mode ,open_mode ,force_logging ,flashback_on ,controlfile_type ,last_open_incarnation# ,protection_mode ,platform_name from v$database};
 my $inst_sql = q{select instance_name ,thread# redo_thrd ,host_name ,version ,startup_time ,ROUND(TO_CHAR(SYSDATE-startup_time),1) up_days ,parallel in_cluster ,status ,logins ,database_status from v$instance};
+my $redo_info_sql = q{select i.instance_name instance_name ,i.thread# redo_thrd ,f.group# groupnum ,f.member redofile ,f.type file_type ,l.status log_status ,round(l.bytes/1024/1024) Mbytes ,l.archived isarchived from gv$logfile f,gv$log l,gv$instance i where f.group#=l.group# and l.thread#=i.thread# and i.inst_id=f.inst_id};
 
 my $pga_stat_sql = q{select name ,decode(unit,'bytes',trunc(to_char(value/1024/1024))||' M','percent',to_char(value)||' %',to_char(value)||' times') mbyte from v$pgastat};
 my $pga_ad_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_for_est ,to_char(pga_target_factor*100,'999.9')||'%' pga_target_factor ,advice_status ,trunc(bytes_processed/1024/1024) Mbytes_processed ,trunc(estd_extra_bytes_rw/1024/1024) estd_extra_Mbytes_rw ,to_char(estd_pga_cache_hit_percentage,'999')||'%' est_pga_cache_hit_percentage ,estd_overalloc_count from v$pga_target_advice};
@@ -95,7 +97,8 @@ $head = title_make($o1m_stat_sql);
 my %overview = (
 	'name' => 'overview',
 	'items'  => [ {'desc'=>'database','sql'=>$db_sql}
-		     ,{'desc'=>'instance','sql'=>$inst_sql} ],
+		     ,{'desc'=>'instance','sql'=>$inst_sql}
+		     ,{'desc'=>'redo info','sql'=>$redo_info_sql} ],
 	'flag' => 0		
 
 	);
@@ -126,25 +129,20 @@ my %conn_info = (
 
 my $dbh = dbhandle_get(\%conn_info);
 
-#my $sql = q{select space_usage_kbytes,occupant_name,occupant_desc from v$sysaux_occupants order by 1 desc};
-#my $sql = q{select COLUMN_NAME from dba_tab_columns where table_name='T1' and owner='HR'};
-
-#my $head = [uc('space_usage_kbytes'),uc('occupant_name'),uc('occupant_desc')];
-#my $head = ['COLUMN_NAME'];
-
 my @ck_db_items = (\%overview ,\%pga ,\%sthelse);
 
 for my $i (0..$#ck_db_items) {
-	mess_print($ck_db_items[$i]{name});	
+	mess_print($ck_db_items[$i]{name},'BOLD WHITE');	
 	for my $j (0..$#{$ck_db_items[$i]{items}}) {
+		mess_print(${$ck_db_items[$i]{items}}[$j]{desc},'MAGENTA');
 		my $head = title_make(${$ck_db_items[$i]{items}}[$j]{sql});
 		my ($re_ref,$fmt_arr) = info_fetch(${$ck_db_items[$i]{items}}[$j]{sql},$dbh);
 		result_print($re_ref,$fmt_arr,$head);
-#		print ">>> ${$ck_db_items[$i]{items}}[$j]{sql}\n";
 	}
-	print $ck_db_items[$i]{name},"\n";
+	#print $ck_db_items[$i]{name},"\n";
 }
 #print Dumper(\@ck_db_items);
+
 
 
 
@@ -189,7 +187,6 @@ $head = title_make($pga_stat_sql);
 ($re_ref,$fmt_arr) = info_fetch($pga_stat_sql,$dbh);
 result_print($re_ref,$fmt_arr,$head);
 
-#my $pga_ov_sql = q{select PGA_TARGET_FOR_ESTIMATE/1024/1024 as PGA_TARGET_FOR_ESTIMATE ,PGA_TARGET_FACTOR ,ADVICE_STATUS,BYTES_PROCESSED/1024/1024 as BYTES_PROCESSED ,ESTD_EXTRA_BYTES_RW ,ESTD_PGA_CACHE_HIT_PERCENTAGE ,ESTD_OVERALLOC_COUNT from v$pga_target_advice};
 
 my $pga_ov_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_for_est ,to_char(pga_target_factor*100,'999.9')||'%' pga_target_factor ,advice_status ,trunc(bytes_processed/1024/1024) Mbytes_processed ,trunc(estd_extra_bytes_rw/1024/1024) estd_extra_Mbytes_rw ,to_char(estd_pga_cache_hit_percentage,'999')||'%' est_pga_cache_hit_percentage ,estd_overalloc_count from v$pga_target_advice};
 
