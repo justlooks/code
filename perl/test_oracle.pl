@@ -68,9 +68,10 @@ sub result_print {
 	print "\n";
 }
 
+# get head info from sql
 sub title_make {
 	my $sql = shift;
-	$sql =~ s/^select\s+(.*)\s+from.*$/\1/i;
+	$sql =~ s/^select\s+(.*?)\s+from.*$/\1/i;
 	my @cols = map {s/.*\s+(\S+)/\1/;
         #print "i get $_\n";    
         $_} split(/ ,/,$sql);
@@ -80,25 +81,82 @@ sub title_make {
 	return \@cols;
 }
 
+# color output
 sub mess_print {
 	my($mesg,$fmt) = @_;
 	print colored(ucfirst($mesg)."\n",$fmt);
 }
 
+# check if input var correct
+sub check_var {
+	my ($var ,$ck_type ,$ck_list) = @_;
+	if ($ck_type eq 'range') {
+		if($var <= $ck_list->[1] and $var >= $ck_list->[0]) {
+			return 1;
+		}	
+	} elsif ($ck_type eq 'equal') {
+		for my $i (0..$#$ck_list) {
+			if($var eq $ck_list->[$i]) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+# receive user input
+sub until_right {
+	my ($prompt,$refuse,$ck_type,$ck_list) = @_;
+	while (true) {
+		print $prompt;
+		chomp($option = <STDIN>);
+		if(check_var($option,$ck_type,$ck_list)) {
+			last;
+		} else {
+			print $refuse;
+			next;
+		}
+	}
+	return $option;
+}
+
+# get CPU&MEM top n pid
+sub get_top_n {
+	my %ck_options = (
+		'CPU' => 3,
+		'MEM' => 4
+		);	
+	my ($option,$topn) = @_;
+	@res = map {chomp;$_} `ps auxw|grep [L]OCAL|sort -k$ck_options{$option}nr|awk 'NR>'$topn'{exit}{print \$2}'`;	
+	return \@res;
+}
+
+# lots of sql - -
+
 my $db_sql = q{select dbid ,name ,created ,current_scn ,log_mode ,open_mode ,force_logging ,flashback_on ,controlfile_type ,last_open_incarnation# ,protection_mode ,platform_name from v$database};
 my $inst_sql = q{select instance_name ,thread# redo_thrd ,host_name ,version ,startup_time ,ROUND(TO_CHAR(SYSDATE-startup_time),1) up_days ,parallel in_cluster ,status ,logins ,database_status from v$instance};
 my $redo_info_sql = q{select i.instance_name instance_name ,i.thread# redo_thrd ,f.group# groupnum ,f.member redofile ,f.type file_type ,l.status log_status ,round(l.bytes/1024/1024) Mbytes ,l.archived isarchived from gv$logfile f,gv$log l,gv$instance i where f.group#=l.group# and l.thread#=i.thread# and i.inst_id=f.inst_id};
+
+my $tbs_info_sql = q{select f.tablespace_name tablespace_name ,t.status status ,t.contents contents ,t.extent_management extent_management ,t.encrypted encrypted ,t.bigfile bigfile ,f.free_mbytes "free(M)" ,u.total_mbytes "total(M)" ,to_char(round((u.total_mbytes-f.free_mbytes)/u.total_mbytes*100,2),'999.99')||'%' used_persent from (select round(sum(bytes)/1024/1024,2) free_mbytes,tablespace_name from dba_free_space group by tablespace_name) f, (select round(sum(bytes)/1024/1024,2) total_mbytes,tablespace_name from dba_data_files group by tablespace_name) u ,(select tablespace_name, status,contents,extent_management,encrypted,compress_for,bigfile from dba_tablespaces ) t where f.tablespace_name = u.tablespace_name and f.tablespace_name = t.tablespace_name};
+
 
 my $pga_stat_sql = q{select name ,decode(unit,'bytes',trunc(to_char(value/1024/1024))||' M','percent',to_char(value)||' %',to_char(value)||' times') mbyte from v$pgastat};
 my $pga_ad_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_for_est ,to_char(pga_target_factor*100,'999.9')||'%' pga_target_factor ,advice_status ,trunc(bytes_processed/1024/1024) Mbytes_processed ,trunc(estd_extra_bytes_rw/1024/1024) estd_extra_Mbytes_rw ,to_char(estd_pga_cache_hit_percentage,'999')||'%' est_pga_cache_hit_percentage ,estd_overalloc_count from v$pga_target_advice};
 my $O1M_info_sql = q{select case when low_optimal_size < 1024*1024 then to_char(low_optimal_size/1024,'999')||'KB' else to_char(low_optimal_size/1024/1024,'999')||'MB' end cache_low ,case when (high_optimal_size+1)<1024*1024 then to_char(high_optimal_size/1024,'999')||'KB' else to_char(high_optimal_size/1024/1024,'999')||'MB' end cache_high ,optimal_executions||'/'||onepass_executions||'/'||multipasses_executions O_1_M  from v$sql_workarea_histogram where total_executions <> 0};
 $head = title_make($o1m_stat_sql);
 
+my $sess_sql = q{select s.sid sid ,s.serial# serial ,s.username username,s.program program from v$session s,v$process p where s.paddr=p.addr and p.spid=?};
+my $content_sql = q{select t.sql_text sql_text from v$session s,v$process p,v$sqltext_with_newlines t where s.paddr=p.addr and s.sql_hash_value=t.hash_value and p.spid=?};
+my $wait_info_sql = q{select p.addr addr ,p.username username ,p.terminal terminal ,p.program program ,s.sid sid ,s.serial# serial ,s.event event ,s.state state ,s.seconds_in_wait wait_seconds ,s.wait_time iswait from v$process p,v$session s where p.addr = s.paddr and p.spid=?};
+
+
 my %overview = (
 	'name' => 'overview',
 	'items'  => [ {'desc'=>'database','sql'=>$db_sql}
 		     ,{'desc'=>'instance','sql'=>$inst_sql}
+		     ,{'desc'=>'tablespace info','sql'=>$tbs_info_sql}
 		     ,{'desc'=>'redo info','sql'=>$redo_info_sql} ],
+	'dynvar' => 0,
 	'flag' => 0		
 
 	);
@@ -108,8 +166,19 @@ my %pga = (
 	'items' => [ {'desc'=>'pga status','sql'=>$pga_stat_sql}
 		    ,{'desc'=>'pga advice','sql'=>$pga_ad_sql}
 		    ,{'desc'=>'work area info','sql'=>$O1M_info_sql} ],
+	'dynvar' => 0,
 	'flag' => 0
 
+	);
+
+my %findsql = (
+	'name' => 'find sql',
+	'items' => [ {'desc'=>'session info','sql'=>$sess_sql}
+		    ,{'desc'=>'sql content','sql'=>$content_sql}
+		    ,{'desc'=>'wait event info','sql'=>$wait_info_sql} ],
+	'dynvar' => 0, 
+	'flag' => 0
+		
 	);
 
 my %sthelse = (
@@ -129,113 +198,50 @@ my %conn_info = (
 
 my $dbh = dbhandle_get(\%conn_info);
 
-my @ck_db_items = (\%overview ,\%pga ,\%sthelse);
+=pod
 
-for my $i (0..$#ck_db_items) {
-	mess_print($ck_db_items[$i]{name},'BOLD WHITE');	
-	for my $j (0..$#{$ck_db_items[$i]{items}}) {
-		mess_print(${$ck_db_items[$i]{items}}[$j]{desc},'MAGENTA');
-		my $head = title_make(${$ck_db_items[$i]{items}}[$j]{sql});
-		my ($re_ref,$fmt_arr) = info_fetch(${$ck_db_items[$i]{items}}[$j]{sql},$dbh);
+my @static_items = (\%overview ,\%pga ,\%sthelse);
+
+for my $i (0..$#static_items) {
+	mess_print($static_items[$i]{name},'BOLD WHITE');	
+	for my $j (0..$#{$static_items[$i]{items}}) {
+		mess_print(${$static_items[$i]{items}}[$j]{desc},'MAGENTA');
+		my $head = title_make(${$static_items[$i]{items}}[$j]{sql});
+		my ($re_ref,$fmt_arr) = info_fetch(${$static_items[$i]{items}}[$j]{sql},$dbh);
 		result_print($re_ref,$fmt_arr,$head);
 	}
-	#print $ck_db_items[$i]{name},"\n";
+	#print $static_items[$i]{name},"\n";
 }
-#print Dumper(\@ck_db_items);
-
-
-
-
-=pod
-# database overview
-
-mess_print("Database Info");
-
-my $db_ov_sql = q{select dbid ,name ,created ,current_scn ,log_mode ,open_mode ,force_logging ,flashback_on ,controlfile_type ,last_open_incarnation# ,protection_mode ,platform_name from v$database};
-
-# supplemental_log_data_min||'/'||supplemental_log_data_fk||'/'||supplemental_log_data_ui||'/'||supplemental_log_data_all "supplemental_log_min/fk/ui/all"
-
-my $head = title_make($db_ov_sql);
-my ($re_ref,$fmt_arr) = info_fetch($db_ov_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-# instance overview
-
-mess_print("Instance Info");
-
-my $inst_ov_sql = q{select instance_name ,thread# redo_thrd ,host_name ,version ,startup_time ,ROUND(TO_CHAR(SYSDATE-startup_time),1) up_days ,parallel in_cluster ,status ,logins ,database_status from v$instance};
-
-$head = title_make($inst_ov_sql);
-($re_ref,$fmt_arr) = info_fetch($inst_ov_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-# redo log info
-mess_print("Redo log Info");
-
-my $redo_info_sql = q{select i.instance_name instance_name ,i.thread# redo_thrd ,f.group# groupnum ,f.member redofile ,f.type file_type ,l.status log_status ,round(l.bytes/1024/1024) Mbytes ,l.archived isarchived from gv$logfile f,gv$log l,gv$instance i where f.group#=l.group# and l.thread#=i.thread# and i.inst_id=f.inst_id};
-$head = title_make($redo_info_sql);
-($re_ref,$fmt_arr) = info_fetch($redo_info_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-
-# pga overview
-
-mess_print("PGA Info");
-
-my $pga_stat_sql = q{select name ,decode(unit,'bytes',trunc(to_char(value/1024/1024))||' M','percent',to_char(value)||' %',to_char(value)||' times') mbyte from v$pgastat};
-$head = title_make($pga_stat_sql);
-($re_ref,$fmt_arr) = info_fetch($pga_stat_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-
-my $pga_ov_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_for_est ,to_char(pga_target_factor*100,'999.9')||'%' pga_target_factor ,advice_status ,trunc(bytes_processed/1024/1024) Mbytes_processed ,trunc(estd_extra_bytes_rw/1024/1024) estd_extra_Mbytes_rw ,to_char(estd_pga_cache_hit_percentage,'999')||'%' est_pga_cache_hit_percentage ,estd_overalloc_count from v$pga_target_advice};
-
-$head = title_make($pga_ov_sql);
-($re_ref,$fmt_arr) = info_fetch($pga_ov_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-my $o1m_stat_sql = q{select case when low_optimal_size < 1024*1024 then to_char(low_optimal_size/1024,'999')||'KB' else to_char(low_optimal_size/1024/1024,'999')||'MB' end cache_low ,case when (high_optimal_size+1)<1024*1024 then to_char(high_optimal_size/1024,'999')||'KB' else to_char(high_optimal_size/1024/1024,'999')||'MB' end cache_high ,optimal_executions||'/'||onepass_executions||'/'||multipasses_executions O_1_M  from v$sql_workarea_histogram where total_executions <> 0};
-$head = title_make($o1m_stat_sql);
-($re_ref,$fmt_arr) = info_fetch($o1m_stat_sql,$dbh);
-result_print($re_ref,$fmt_arr,$head);
-
-
-mess_print("Find info by OS process id");
-
-my $sess_sql = q{select s.sid sid ,s.serial# serial ,s.username username,s.program program from v$session s,v$process p where s.paddr=p.addr and p.spid=?};
-my $content_sql = q{select t.sql_text sql_text from v$session s,v$process p,v$sqltext_with_newlines t where s.paddr=p.addr and s.sql_hash_value=t.hash_value and p.spid=?};
-$head = title_make($sess_sql);
-($re_ref,$fmt_arr) = info_fetch($sess_sql,$dbh,[5273]);
-result_print($re_ref,$fmt_arr,$head);
-
-$head = title_make($content_sql);
-($re_ref,$fmt_arr) = info_fetch($content_sql,$dbh,[5273]);
-result_print($re_ref,$fmt_arr,$head);
-
-my $wait_info_sql = q{select p.addr addr ,p.username username ,p.terminal terminal ,p.program program ,s.sid sid ,s.serial# serial ,s.event event ,s.state state ,s.seconds_in_wait wait_seconds ,s.wait_time iswait from v$process p,v$session s where p.addr = s.paddr and p.spid=?};
-$head = title_make($wait_info_sql);
-($re_ref,$fmt_arr) = info_fetch($wait_info_sql,$dbh,[5273]);
-result_print($re_ref,$fmt_arr,$head);
-
-
-mess_print("I/O Section");
-
-my $redo_io_sql = q{
-with log_history as
-     (select thread#,first_time,
-             lag(first_time) over (order by thread#,sequence#) last_first_time,
-             (first_time-lag(first_time) over (order by thread#,sequence#))*24*60 last_log_time_minutes,
-             lag(thread#) over (order by thread#,sequence#) last_thread#
-      from v$log_history)
-select round(min(last_log_time_minutes),2) min_minutes,
-       round(max(last_log_time_minutes),2) max_minutes,
-       round(avg(last_log_time_minutes),2) avg_minutes
-from log_history
-where last_first_time IS NOT NULL and last_thread#=thread# and first_time > sysdate-1};
-
 =cut
 
-dbhandle_release($dbh);
+my @search_sqls = (\%findsql);
 
+my $boundpmt = "choose CPU-bound/MEM-bound type sql (input 'CPU' or 'MEM') : ";
+my $boundrfs = "unrecognized option,input 'CPU' or 'MEM' plz\n";
+
+my $toppmt = "fetch top n records (input 1-50 integer) : ";
+my $toprfs = "plz input number which great then zero and less then 51\n";
+
+$type = until_right($boundpmt,$boundrfs,'equal',['CPU','MEM']);
+$topn = until_right($toppmt,$toprfs,'range',[1,50]);
+
+$proidarr_ref = get_top_n($type,$topn);
+
+mess_print($findsql{name},'BOLD WHITE');	
+mess_print("Top $topn",'GREEN');	
+
+for my $i (0..$#$proidarr_ref) {
+	mess_print("== ".($i+1),'GREEN');	
+	for my $j (0..$#{$findsql{items}}) {
+		mess_print(${$findsql{items}}[$j]{desc},'MAGENTA');
+		my $head = title_make(${$findsql{items}}[$j]{sql});
+		my ($re_ref,$fmt_arr) = info_fetch(${$findsql{items}}[$j]{sql},$dbh,[$proidarr_ref->[$i]]);
+		result_print($re_ref,$fmt_arr,$head);
+	}
+}
+
+
+
+dbhandle_release($dbh);
 
 
