@@ -7,6 +7,8 @@ use Data::Dumper;
 
 $Term::ANSIColor::AUTORESET = 1;
 
+# todo 添加查询某个用户的权限，表空间配额，角色 
+
 sub dbhandle_get {
 	my $info = shift;
 	my $handle = DBI->connect("dbi:Oracle:host=$info->{host};sid=$info->{sid}",$info->{user},$info->{pass},{RaiseError=>0,PrintError=>0,ora_session_mode=>2}) or die("connect refused ",$DBI::errstr,"\n");
@@ -84,7 +86,7 @@ sub title_make {
 # color output
 sub mess_print {
 	my($mesg,$fmt) = @_;
-	print colored(ucfirst($mesg)."\n",$fmt);
+	print colored(ucfirst($mesg),$fmt);
 }
 
 # check if input var correct
@@ -138,6 +140,8 @@ my $inst_sql = q{select instance_name ,thread# redo_thrd ,host_name ,version ,st
 my $redo_info_sql = q{select i.instance_name instance_name ,i.thread# redo_thrd ,f.group# groupnum ,f.member redofile ,f.type file_type ,l.status log_status ,round(l.bytes/1024/1024) Mbytes ,l.archived isarchived from gv$logfile f,gv$log l,gv$instance i where f.group#=l.group# and l.thread#=i.thread# and i.inst_id=f.inst_id};
 
 my $tbs_info_sql = q{select f.tablespace_name tablespace_name ,t.status status ,t.contents contents ,t.extent_management extent_management ,t.encrypted encrypted ,t.bigfile bigfile ,f.free_mbytes "free(M)" ,u.total_mbytes "total(M)" ,to_char(round((u.total_mbytes-f.free_mbytes)/u.total_mbytes*100,2),'999.99')||'%' used_persent from (select round(sum(bytes)/1024/1024,2) free_mbytes,tablespace_name from dba_free_space group by tablespace_name) f, (select round(sum(bytes)/1024/1024,2) total_mbytes,tablespace_name from dba_data_files group by tablespace_name) u ,(select tablespace_name, status,contents,extent_management,encrypted,compress_for,bigfile from dba_tablespaces ) t where f.tablespace_name = u.tablespace_name and f.tablespace_name = t.tablespace_name};
+my $data_file_sql = q{select file_id ,relative_fno ,tablespace_name ,bytes/1024/1024 "size(M)" ,file_name ,status ,online_status ,autoextensible from dba_data_files order by tablespace_name};
+my $comps_sql = q{select comp_id ,comp_name ,version ,status ,modified ,control ,schema ,procedure from dba_registry order by comp_name};
 
 
 my $pga_stat_sql = q{select name ,decode(unit,'bytes',trunc(to_char(value/1024/1024))||' M','percent',to_char(value)||' %',to_char(value)||' times') mbyte from v$pgastat};
@@ -145,9 +149,18 @@ my $pga_ad_sql = q{select trunc(pga_target_for_estimate/1024/1024) pga_target_fo
 my $O1M_info_sql = q{select case when low_optimal_size < 1024*1024 then to_char(low_optimal_size/1024,'999')||'KB' else to_char(low_optimal_size/1024/1024,'999')||'MB' end cache_low ,case when (high_optimal_size+1)<1024*1024 then to_char(high_optimal_size/1024,'999')||'KB' else to_char(high_optimal_size/1024/1024,'999')||'MB' end cache_high ,optimal_executions||'/'||onepass_executions||'/'||multipasses_executions O_1_M  from v$sql_workarea_histogram where total_executions <> 0};
 $head = title_make($o1m_stat_sql);
 
-my $sess_sql = q{select s.sid sid ,s.serial# serial ,s.username username,s.program program from v$session s,v$process p where s.paddr=p.addr and p.spid=?};
+my $bsetinfo_sql = q{select bs.recid recid ,bp.piece# pieceno ,bp.copy# copyno ,bp.recid bp_key ,DECODE(bs.controlfile_included,'NO','-',bs.controlfile_included)||'  '||DECODE(backup_type,'L','Archived Redo Logs','D','Datafile Full Backup','D','Datafile Full Backup','I','Incremental Backup') "controlfile_included&type" ,TO_CHAR(bs.completion_time,'DD-MON-YYYY HH24:MI:SS') completion_time ,DECODE(status,'A','Available','D','Deleted','X','Expired') status ,handle handle from v$backup_set bs, v$backup_piece bp where bs.set_stamp = bp.set_stamp and bs.set_count = bp.set_count and bp.status in ('A','X') and bs.controlfile_included != 'NO' order by bs.recid, piece#};
+my $bpicinfo_sql = q{select bs.recid bs_key ,bp.piece# pieceno ,bp.copy# copyno ,bp.recid bp_key ,DECODE(status,'A','Available','D','Deleted','X','Expired') status ,handle handle ,TO_CHAR(bp.start_time,'mm-dd-yy HH24:MI:SS') start_time ,TO_CHAR(bp.completion_time,'mm-dd-yy HH24:MI:SS') completion_time ,to_char(bp.elapsed_seconds,'99.9') elapsed_seconds from v$backup_set bs,v$backup_piece bp where bs.set_stamp = bp.set_stamp and bs.set_count = bp.set_count and bp.status in ('A','X') order by bs.recid,piece#};
+my $spfile_sql = q{select bs.recid bs_key ,bp.piece# pieceno ,bp.copy# copyno ,bp.recid bp_key ,sp.spfile_included spfile_included ,TO_CHAR(bs.completion_time,'DD-MON-YYYY HH24:MI:SS') completion_time ,DECODE(status,'A','Available','D','Deleted','X','Expired') status ,handle handle from v$backup_set bs,v$backup_piece bp,(select distinct set_stamp, set_count ,'YES' spfile_included from v$backup_spfile) sp where bs.set_stamp = bp.set_stamp and bs.set_count = bp.set_count and bp.status in ('A','X') and bs.set_stamp = sp.set_stamp and bs.set_count = sp.set_count order by bs.recid,piece#};
+
+my $snap_set_info_sql = q{select dbid ,snap_interval ,retention ,topnsql from dba_hist_wr_control};
+
+my $sess_sql = q{select s.sid sid ,s.serial# serial ,s.username username ,s.program program ,to_char(logon_time,'yyyy-mm-dd hh24:mi:ss') login_time from v$session s,v$process p where s.paddr=p.addr and p.spid=?};
 my $content_sql = q{select t.sql_text sql_text from v$session s,v$process p,v$sqltext_with_newlines t where s.paddr=p.addr and s.sql_hash_value=t.hash_value and p.spid=?};
-my $wait_info_sql = q{select p.addr addr ,p.username username ,p.terminal terminal ,p.program program ,s.sid sid ,s.serial# serial ,s.event event ,s.state state ,s.seconds_in_wait wait_seconds ,s.wait_time iswait from v$process p,v$session s where p.addr = s.paddr and p.spid=?};
+my $wait_info_sql = q{select p.addr addr ,p.username username ,p.terminal terminal ,p.program program ,p.pga_used_mem/1024 pga_usedKbytes ,p.pga_alloc_mem/1024 pga_allocKbytes ,p.pga_freeable_mem/1024 pga_freeKbytes ,pga_max_mem/1024 as pga_maxKbytes ,s.sid sid ,s.serial# serial ,s.event event ,s.state state ,s.seconds_in_wait wait_seconds ,s.wait_time iswait from v$process p,v$session s where p.addr = s.paddr and p.spid=?};
+
+my $user_all_sql = q{select username from dba_users};
+my $user_role_sql = q{select * from dba_role_privs where grantee=?};
 
 
 my %overview = (
@@ -155,7 +168,9 @@ my %overview = (
 	'items'  => [ {'desc'=>'database','sql'=>$db_sql}
 		     ,{'desc'=>'instance','sql'=>$inst_sql}
 		     ,{'desc'=>'tablespace info','sql'=>$tbs_info_sql}
-		     ,{'desc'=>'redo info','sql'=>$redo_info_sql} ],
+		     ,{'desc'=>'redo info','sql'=>$redo_info_sql}
+		     ,{'desc'=>'datafile info','sql'=>$data_file_sql}
+		     ,{'desc'=>'db components','sql'=>$comps_sql} ],
 	'dynvar' => 0,
 	'flag' => 0		
 
@@ -171,6 +186,24 @@ my %pga = (
 
 	);
 
+# not yet
+my %backup = (
+	'name' => 'backup information',
+	'items' => [ {'desc'=>'backup set info','sql'=>$bsetinfo_sql} 
+		    ,{'desc'=>'backup piece info','sql'=>$bpicinfo_sql}
+		    ,{'desc'=>'spfile info','sql'=>$spfile_sql} ],
+	'flag' => 0
+	);
+# end not yet
+
+# AWR report
+my %awr = (
+	'name' => 'awr infor',
+	'items' => [ {'desc'=>'snapshot setting info','sql'=>$snap_set_info_sql} ],
+	'flag' => 0
+
+	);
+
 my %findsql = (
 	'name' => 'find sql',
 	'items' => [ {'desc'=>'session info','sql'=>$sess_sql}
@@ -181,10 +214,18 @@ my %findsql = (
 		
 	);
 
+my %usersql = (
+	'name' => 'find user',
+	'item' => [ {'desc'=>'user role','sql'=>$user_role_sql}
+		   ,{'desc'=>'all users','sql'=>$user_all_sql} ],
+		
+	'flag' => 0
+	);
+
 my %sthelse = (
 	'name' => 'sthelse',
 	'items' => [ {'desc' =>'haha','sql'=>'no'} ],
-	'flag' => 1
+	'flag' => 0
 );
 
 
@@ -196,24 +237,53 @@ my %conn_info = (
 
 #print Dumper(\%conn_info);
 
+
 my $dbh = dbhandle_get(\%conn_info);
 
-=pod
 
-my @static_items = (\%overview ,\%pga ,\%sthelse);
+my @static_items = (\%overview ,\%pga ,\%backup ,\%awr ,\%sthelse);
+
+# pring manu
+my $spline= '=' x 90;
+
+mess_print($spline."\n",'BOLD WHITE');
+print "\n";
+for my $i (0..$#static_items) {
+
+	mess_print(($i+1).'. '.$static_items[$i]{name}."\t",'BOLD WHITE');
+}
+print "\n";
+print "\n";
+mess_print($spline."\n",'BOLD WHITE');
+
+print "choose items which you want to view (seperate by ','): ";
+my @items_cfg = split /\s*,\s*/, (chomp($_=<STDIN>),$_);
+
+if($#items_cfg == -1) {
+	print "not pick items\n";
+	exit;
+}
+
+for $i (0..$#items_cfg) {
+	print "i pick $items_cfg[$i] $#items_cfg \n";
+	$static_items[($items_cfg[$i]-1)]{flag} = 1;
+}
 
 for my $i (0..$#static_items) {
-	mess_print($static_items[$i]{name},'BOLD WHITE');	
-	for my $j (0..$#{$static_items[$i]{items}}) {
-		mess_print(${$static_items[$i]{items}}[$j]{desc},'MAGENTA');
-		my $head = title_make(${$static_items[$i]{items}}[$j]{sql});
-		my ($re_ref,$fmt_arr) = info_fetch(${$static_items[$i]{items}}[$j]{sql},$dbh);
-		result_print($re_ref,$fmt_arr,$head);
-	}
+	if($static_items[$i]{flag} == 1) {
+		mess_print($static_items[$i]{name}."\n",'BOLD WHITE');	
+		for my $j (0..$#{$static_items[$i]{items}}) {
+			mess_print(${$static_items[$i]{items}}[$j]{desc}."\n",'MAGENTA');
+			my $head = title_make(${$static_items[$i]{items}}[$j]{sql});
+			my ($re_ref,$fmt_arr) = info_fetch(${$static_items[$i]{items}}[$j]{sql},$dbh);
+			result_print($re_ref,$fmt_arr,$head);
+		}
 	#print $static_items[$i]{name},"\n";
+	}
 }
-=cut
 
+
+=pod
 my @search_sqls = (\%findsql);
 
 my $boundpmt = "choose CPU-bound/MEM-bound type sql (input 'CPU' or 'MEM') : ";
@@ -239,6 +309,10 @@ for my $i (0..$#$proidarr_ref) {
 		result_print($re_ref,$fmt_arr,$head);
 	}
 }
+
+=cut
+
+my @search_user = (\%usersql);
 
 
 
