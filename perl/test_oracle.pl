@@ -133,6 +133,46 @@ sub get_top_n {
 	return \@res;
 }
 
+
+#----------------------------------------------------
+#
+#   tasks function
+#
+#----------------------------------------------------
+
+sub query_user {
+	my $dbh = shift;
+	my $list_users_sql = q{select username from dba_users where username is not null};
+	my ($users, undef) = info_fetch($list_users_sql, $dbh); 
+	my @users = ();
+	print "Total ".($#$users+1)." users in database \n";
+	for my $i (0..$#$users) {
+		push @users ,$users->[$i][0];
+		printf "%-25s  ",$users->[$i][0];
+		print "\n" unless ($i+1)%6;
+	}
+	print "\n";
+	my $list_role_sql = q{select granted_role ,admin_option ,default_role from dba_role_privs where grantee=?};
+	my $list_syspriv_sql = q{select privilege ,admin_option from  dba_sys_privs where grantee=?};
+	my $list_objpriv_sql = q{select owner ,table_name ,grantor ,privilege ,grantable ,hierarchy from dba_tab_privs where grantee=?};
+
+	my $op_user_priv = [ {'desc'=>'user roles','sql'=>$list_role_sql}
+		    	    ,{'desc'=>'user sys priv','sql'=>$list_syspriv_sql}
+			    ,{'desc'=>'user obj priv','sql'=>$list_objpriv_sql} ];
+
+	my $userpmt = "pick a username for query ,or enter q for quit(case-sensitive) : ";
+	my $userrfs = "not a correct username in database,try again\n";
+	my $username = until_right($userpmt,$userrfs,'equal',[@users,'q']);
+
+	for my $j (0..$#$op_user_priv) {
+		mess_print(${$op_user_priv->[$j]}{desc}."\n\n",'BOLD WHITE');
+		my $head = title_make(${$op_user_priv->[$j]}{sql});
+		my ($re_ref,$fmt_arr) = info_fetch(${$op_user_priv->[$j]}{sql},$dbh,[$username]);
+		result_print($re_ref,$fmt_arr,$head);
+		print "\n";
+	}	
+}
+
 # lots of sql - -
 
 my $db_sql = q{select dbid ,name ,created ,current_scn ,log_mode ,open_mode ,force_logging ,flashback_on ,controlfile_type ,last_open_incarnation# ,protection_mode ,platform_name from v$database};
@@ -214,7 +254,7 @@ my %findsql = (
 		
 	);
 
-my %usersql = (
+my %userinfo = (
 	'name' => 'find user',
 	'item' => [ {'desc'=>'user role','sql'=>$user_role_sql}
 		   ,{'desc'=>'all users','sql'=>$user_all_sql} ],
@@ -228,6 +268,13 @@ my %sthelse = (
 	'flag' => 0
 );
 
+my $test_sql = q{select DBMS_METADATA.GET_DDL('TABLE','T1') content from dual};
+my %test = (
+	'name' => 'for test',
+	'items' => [ {'desc'=>'test item','sql'=>$test_sql} ],
+	'flag' => 1
+	);
+
 
 my %conn_info = (
 	'user' => 'sys',
@@ -240,6 +287,10 @@ my %conn_info = (
 
 my $dbh = dbhandle_get(\%conn_info);
 
+#$dbh->{LongReadLen} = 9000000;
+#$dbh->{LongTruncOk} = 0;
+
+=pod
 
 my @static_items = (\%overview ,\%pga ,\%backup ,\%awr ,\%sthelse);
 
@@ -282,8 +333,39 @@ for my $i (0..$#static_items) {
 	}
 }
 
+=cut
 
 =pod
+my @tasks = (\%findsql ,\%userinfo);
+
+mess_print($spline."\n",'BOLD WHITE');
+print "\n";
+for my $i (0..$#tasks) {
+
+        mess_print(($i+1).'. '.$tasks[$i]{name}."\t",'BOLD WHITE');
+}
+print "\n";
+print "\n";
+mess_print($spline."\n",'BOLD WHITE');
+
+print "choose task which you want to perform (only one task): ";
+my @tasks_cfg = split /\s*,\s*/, (chomp($_=<STDIN>),$_);
+
+if($#tasks_cfg == -1) {
+        print "not pick items\n";
+        exit;
+}
+
+for $i (0..$#tasks_cfg) {
+        print "i pick tasks --> $tasks_cfg[$i] $#tasks_cfg \n";
+        $static_items[($tasks_cfg[$i]-1)]{flag} = 1;
+}
+=cut
+
+
+
+=pod
+
 my @search_sqls = (\%findsql);
 
 my $boundpmt = "choose CPU-bound/MEM-bound type sql (input 'CPU' or 'MEM') : ";
@@ -312,10 +394,12 @@ for my $i (0..$#$proidarr_ref) {
 
 =cut
 
-my @search_user = (\%usersql);
+#-------------------
+#
+#   function test
+#
+#-------------------
 
-
+query_user($dbh);
 
 dbhandle_release($dbh);
-
-
